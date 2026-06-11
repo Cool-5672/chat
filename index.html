@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Private Encrypted Chat</title>
+  <style>
+    :root{--bg1:#e6f0ff;--bg2:#f8fdff;--accent:#2563eb;--accent-600:#1e40af;--muted:#6b7280;--card:#fff;--line:#e5e7eb;--bubble-me:#2563eb;--bubble-other:#e6eefc;--text-me:#fff;--text-other:#0f172a;--radius:16px;--shadow:0 12px 30px rgba(16,24,40,.12);--gap:10px}
+    *{box-sizing:border-box} html,body{height:100%;margin:0;font-family:system-ui,-apple-system,sans-serif;background:linear-gradient(135deg,var(--bg1),var(--bg2));-webkit-font-smoothing:antialiased} body{display:flex;align-items:center;justify-content:center;padding:16px} button,input,textarea{font:inherit}
+    
+    #toastContainer { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+    .toast { background: var(--card); color: var(--text-other); padding: 14px 20px; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); border-left: 4px solid var(--accent); font-size: 0.9rem; font-weight: 500; animation: toastIn 0.3s forwards; max-width: 350px; word-break: break-word; pointer-events: auto; display: flex; align-items: center; gap: 10px; transition: all 0.3s ease; }
+    .toast.error { border-left-color: #ef4444; }
+    .toast.success { border-left-color: #10b981; }
+    .toast.fade-out { opacity: 0; transform: translateX(20px); }
+    @keyframes toastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    .shell{width:100%;max-width:1100px;height:min(100vh - 32px,940px);display:flex;flex-direction:column;gap:14px;min-width:0}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(90deg,var(--accent),var(--accent-600));color:#fff;padding:14px 16px;border-radius:18px;box-shadow:var(--shadow)}
+    .brand{display:flex;align-items:center;gap:12px;min-width:0}.logo{width:42px;height:42px;border-radius:12px;background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0}.brand h1{font-size:1rem;line-height:1.2;margin:0}.brand p{margin:2px 0 0;font-size:.82rem;opacity:.92}.userbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.pill{background:rgba(255,255,255,.14);padding:8px 10px;border-radius:999px;font-size:.88rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ghost{border:none;background:rgba(255,255,255,.14);color:#fff;padding:10px 12px;border-radius:10px;cursor:pointer;font-weight:700}.ghost:active{transform:translateY(1px)}
+    .panel{flex:1;min-height:0;background:var(--card);border-radius:18px;box-shadow:var(--shadow);overflow:hidden;display:flex;position:relative;}
+    .auth{flex:1;display:grid;place-items:center;padding:20px;min-height:0;overflow-y:auto;width:100%;}.auth-card{width:min(100%,560px);background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.06);padding:20px}.auth-card h2{margin:0 0 6px;font-size:1.4rem}.auth-card p{margin:0 0 16px;color:var(--muted)}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:.88rem;color:#334155;font-weight:700}.field input,.field textarea,.field select{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;outline:none;min-width:0}.field input:focus,.field textarea:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:none;border-radius:12px;padding:12px 14px;font-weight:800;cursor:pointer}.btn.primary{background:var(--accent);color:#fff}.btn.primary:active{transform:translateY(1px)}.btn.secondary{background:#eef2ff;color:#1e3a8a}.small-note{font-size:.84rem;color:var(--muted);line-height:1.35}
+    
+    .app{flex:1;display:grid;grid-template-columns:300px 1fr;min-height:0;overflow:hidden;width:100%;}
+    
+    /* SCROLL BAR FIX: Sidebar is now one globally scrollable block */
+    .sidebar{border-right:1px solid var(--line);background:#fcfdff;display:flex;flex-direction:column;min-height:0;overflow-y:auto;overflow-x:hidden;}
+    .sidebar-head{padding:14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px;flex-shrink:0}.sidebar-head h3{margin:0;font-size:1rem}.sidebar-head .me{color:var(--muted);font-size:.86rem;word-break:break-word;line-height:1.35}
+    .sidebar-scroll{padding:10px;flex-shrink:0;display:flex;flex-direction:column;}
+    .sidebar-actions{padding:12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px;flex-shrink:0}.sidebar-actions .field input{padding:11px}
+    
+    .chat-item{border:1px solid var(--line);background:#fff;border-radius:14px;padding:12px;cursor:pointer;margin-bottom:10px;transition:.15s ease;display:flex;flex-direction:column;gap:6px;min-width:0}.chat-item:hover{border-color:#bfdbfe;transform:translateY(-1px)}.chat-item.active{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.10)}.chat-item .title{font-weight:800;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-item .meta{font-size:.82rem;color:var(--muted);display:flex;justify-content:space-between;gap:10px}
+    
+    .main{display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative}.chat-head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(180deg,#fff,#fbfdff);flex-wrap:wrap;flex-shrink:0}.chat-head .left{min-width:0;flex:1 1 220px}.chat-head h2{margin:0;font-size:1.05rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chat-head p{margin:3px 0 0;font-size:.84rem;color:var(--muted)}.chat-head .right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;flex:0 1 auto}.unlock-input{min-width:min(320px,100%)}
+    .messages{flex:1;min-height:0;overflow-y:auto;padding:14px;background:linear-gradient(180deg,rgba(255,255,255,.03),transparent);overscroll-behavior:contain;scroll-behavior:smooth;position:relative}.messages-inner{display:flex;flex-direction:column;gap:var(--gap);min-height:100%}.message{display:flex;gap:8px;align-items:flex-end;max-width:min(85%,760px);min-width:0}.row-right{margin-left:auto;flex-direction:row-reverse}.avatar{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;background:linear-gradient(135deg,#4f46e5,#06b6d4);flex-shrink:0}.bubble{padding:10px 12px;border-radius:12px;line-height:1.25;word-break:break-word;box-shadow:0 6px 18px rgba(2,6,23,.06);max-width:100%;min-width:0}.bubble-other{background:var(--bubble-other);color:var(--text-other);border-top-left-radius:4px}.bubble-me{background:var(--bubble-me);color:var(--text-me);border-top-right-radius:4px}.sender{font-weight:800;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.msgtext{white-space:pre-wrap}.meta-row{display:flex;gap:8px;align-items:center;margin-top:6px;font-size:.72rem;color:var(--muted)}.composer{padding:12px;border-top:1px solid var(--line);background:linear-gradient(180deg,transparent,rgba(0,0,0,.02));display:flex;flex-direction:column;gap:10px;flex-shrink:0}.composer-grid{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}textarea#text{resize:none;min-height:46px;max-height:160px;padding:12px;border-radius:12px;border:1px solid var(--line);outline:none;width:100%}textarea#text:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.12)}.lockline{font-size:.84rem;color:var(--muted);min-height:1.1em}.empty{height:100%;display:grid;place-items:center;padding:30px;color:var(--muted);text-align:center}.empty-card{max-width:420px;background:#fff;border:1px dashed #dbeafe;border-radius:18px;padding:24px;box-shadow:0 10px 25px rgba(0,0,0,.04)}
+    
+    .spinner { border: 4px solid rgba(0,0,0,0.1); width: 40px; height: 40px; border-radius: 50%; border-left-color: var(--accent); animation: spin 1s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    @media (max-width:860px){
+      body{padding:0}.shell{height:100vh;max-width:none}.panel,.topbar{border-radius:0}
+      .app{grid-template-columns:1fr;grid-template-rows:45vh minmax(0,1fr)}
+      .sidebar{border-right:none;border-bottom:1px solid var(--line);height:45vh;}
+      .sidebar-head{padding:12px}.chat-head{padding:12px}.messages{padding:10px}.composer{padding:10px}.unlock-input{min-width:0;flex:1 1 220px}.composer-grid{grid-template-columns:1fr}
+    }
+    @media (max-width:520px){
+      .grid,.composer-grid{grid-template-columns:1fr}.topbar{padding:12px}.pill{display:none}.brand p{display:none}.auth{padding:12px}.auth-card{padding:16px}
+      .message{max-width:92%}.avatar{width:32px;height:32px;border-radius:9px}
+      .app{grid-template-rows:50vh minmax(0,1fr)}.sidebar{height:50vh;}
+    }
+  </style>
+</head>
+<body>
+  <div id="toastContainer"></div>
+
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand"><div class="logo">🔐</div><div><h1>Private Encrypted Chat</h1><p>Username login, optional recovery email, private rooms, client-side AES-GCM</p></div></div>
+      <div class="userbar" id="userbar" style="display:none"><div class="pill" id="whoami">Signed out</div><button class="ghost" id="logoutBtn">Log out</button></div>
+    </div>
+
+    <div class="panel" id="panel">
+      
+      <div id="loadingView" class="auth" style="display:grid;">
+        <div class="auth-card" style="box-shadow:none; border:none; background:transparent; text-align:center;">
+          <div class="spinner"></div>
+          <h2 style="color: #0f172a;">Loading...</h2>
+          <p>Establishing secure connection</p>
+        </div>
+      </div>
+
+      <div class="auth" id="authView" style="display:none">
+        <div class="auth-card">
+          <h2>Sign in or create an account</h2>
+          <p>Use your username and password. Add an email only if you want password resets.</p>
+          <div class="grid">
+            <div class="field"><label for="username">Username</label><input id="username" type="text" autocomplete="nickname" placeholder="alice"></div>
+            <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Your password"></div>
+            <div class="field"><label for="recoveryEmail">Recovery email, optional</label><input id="recoveryEmail" type="email" autocomplete="email" placeholder="you@example.com"></div>
+            <div class="field"><label for="displayName">Display name, optional</label><input id="displayName" type="text" autocomplete="name" placeholder="Alice"></div>
+          </div>
+          <div class="row" style="margin-top:14px"><button class="btn primary" id="signUpBtn">Create account</button><button class="btn secondary" id="signInBtn">Sign in</button><button class="btn secondary" id="resetBtn">Password reset</button></div>
+          <p class="small-note" style="margin-top:14px">The username must be unique. The email field is optional. If you provide one, it will be used for password recovery. If you do not, the account will still work but password reset will not be available.</p>
+        </div>
+      </div>
+
+      <div class="app" id="appView" style="display:none">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <div><h3>Your chats</h3><div class="me" id="meInfo"></div></div>
+            <div class="field"><label for="newChatTitle">New chat title</label><input id="newChatTitle" type="text" placeholder="Project team"></div>
+            <div class="field"><label for="inviteUsers">Invite usernames</label><input id="inviteUsers" type="text" placeholder="bob, charlie, dana"></div>
+            <div class="field"><label for="chatPasscode">Chat passcode</label><input id="chatPasscode" type="password" placeholder="Shared room password"></div>
+            <button class="btn primary" id="createChatBtn">Create chat</button>
+          </div>
+          <div class="sidebar-scroll" id="chatList"></div>
+          <div class="sidebar-actions"><div class="field"><label for="globalSearch">Invite to active chat</label><input id="globalSearch" type="text" placeholder="Type usernames, comma-separated"></div><button class="btn secondary" id="inviteBtn">Invite to active chat</button></div>
+        </aside>
+
+        <main class="main">
+          <div class="chat-head">
+            <div class="left"><h2 id="chatTitle">No chat selected</h2><p id="chatMeta">Create a room or select one from the list.</p></div>
+            <div class="right"><div class="field unlock-input" style="margin:0"><input id="roomPasscode" type="password" placeholder="Enter room passcode to unlock"></div><button class="btn secondary" id="unlockBtn">Unlock</button></div>
+          </div>
+
+          <div class="messages" id="messages"><div class="messages-inner" id="messages-inner"></div><div class="empty" id="emptyState"><div class="empty-card"><h3 style="margin:0 0 8px;color:#0f172a">Choose a chat</h3><div>After you unlock a room with its passcode, messages will decrypt here.</div></div></div></div>
+
+          <div class="composer"><div class="lockline" id="lockLine">Signed in, but no room is selected yet.</div><div class="composer-grid"><textarea id="text" placeholder="Type a message" rows="1"></textarea><button class="btn primary" id="sendBtn">Send</button></div></div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.5.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.5.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.5.2/firebase-database-compat.js"></script>
+  <script>
+    const firebaseConfig={apiKey:"AIzaSyD0AE0DTIE14QxjEPieoSL0DTRJKwejvnk",authDomain:"chatroom-4ac6a.firebaseapp.com",databaseURL:"https://chatroom-4ac6a-default-rtdb.asia-southeast1.firebasedatabase.app",projectId:"chatroom-4ac6a",storageBucket:"chatroom-4ac6a.firebasestorage.app",messagingSenderId:"777793951890",appId:"1:777793951890:web:f038f4fe7584b57ff46e4b",measurementId:"G-V8MVN2RDJ7"};
+    firebase.initializeApp(firebaseConfig);
+    const auth=firebase.auth(),db=firebase.database(),enc=new TextEncoder(),dec=new TextDecoder(),AUTH_EMAIL_DOMAIN='chatroom-4ac6a.local';
+
+    const $=id=>document.getElementById(id),loadingView=$('loadingView'),authView=$('authView'),appView=$('appView'),userbar=$('userbar'),whoami=$('whoami'),meInfo=$('meInfo'),chatList=$('chatList'),chatTitle=$('chatTitle'),chatMeta=$('chatMeta'),messagesInner=$('messages-inner'),messagesDiv=$('messages'),emptyState=$('emptyState'),lockLine=$('lockLine'),usernameInput=$('username'),passwordInput=$('password'),recoveryEmailInput=$('recoveryEmail'),displayNameInput=$('displayName'),newChatTitle=$('newChatTitle'),inviteUsers=$('inviteUsers'),chatPasscode=$('chatPasscode'),globalSearch=$('globalSearch'),roomPasscode=$('roomPasscode'),textInput=$('text'),signUpBtn=$('signUpBtn'),signInBtn=$('signInBtn'),resetBtn=$('resetBtn'),logoutBtn=$('logoutBtn'),createChatBtn=$('createChatBtn'),inviteBtn=$('inviteBtn'),unlockBtn=$('unlockBtn'),sendBtn=$('sendBtn');
+
+    let currentUser=null,currentProfile=null,chats=[],activeChatId=null,activeChat=null,activeMessagesRef=null,activeMessagesOff=null,chatPassCache=JSON.parse(localStorage.getItem('chatPassCache')||'{}'),chatMessageBuffer=[],chatListeners=[];
+    let isSigningUp = false;
+
+    const norm=s=>(s||'').trim().toLowerCase().split(' ').join(''),safe=s=>(s||'Anonymous').trim().slice(0,32)||'Anonymous',uid6=s=>(s||'').slice(0,6),ts=t=>{const d=new Date(t||Date.now());let h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0');return `${h=h%12||12}:${m} ${h>=12?'PM':'AM'}`};
+    const b64=b=>{let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s)},u8=s=>{const b=atob(s),a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a};
+    const validUser=s=>{s=norm(s);if(s.length<3||s.length>24)return false;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(!((c>=97&&c<=122)||(c>=48&&c<=57)||c===95))return false}return true},validEmail=s=>{s=(s||'').trim();const a=s.indexOf('@'),l=s.lastIndexOf('@'),d=s.lastIndexOf('.');return !!s&&a>0&&a===l&&d>a+1&&d<s.length-1};
+    
+    function notify(msg, type = 'error') {
+      const container = $('toastContainer');
+      const t = document.createElement('div');
+      t.className = `toast ${type}`;
+      t.innerHTML = `<span style="font-size:1.1rem">${type==='error'?'⚠️':'✅'}</span><div>${msg}</div>`;
+      container.appendChild(t);
+      setTimeout(() => { t.classList.add('fade-out'); setTimeout(() => t.remove(), 300); }, 4000);
+    }
+
+    async function deriveKey(pass,salt){const base=await crypto.subtle.importKey('raw',enc.encode(pass),{name:'PBKDF2'},false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:100000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}
+    async function encrypt(text,pass){const iv=crypto.getRandomValues(new Uint8Array(12)),salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(pass,salt),data=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(text));return {iv:b64(iv),salt:b64(salt),data:b64(new Uint8Array(data))}}
+    async function decrypt(payload,pass){try{const iv=u8(payload.iv),salt=u8(payload.salt),data=u8(payload.data),key=await deriveKey(pass,salt),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,data);return dec.decode(plain)}catch(e){return null}}
+    
+    // 0 = Auth View, 1 = App View, 2 = Loading Screen
+    const showView = (state) => {
+      loadingView.style.display = state === 2 ? 'grid' : 'none';
+      authView.style.display = state === 0 ? 'grid' : 'none';
+      appView.style.display = state === 1 ? 'grid' : 'none';
+      userbar.style.display = state === 1 ? 'flex' : 'none';
+    };
+
+    const loadProfile=async uid=>{const s=await db.ref(`users/${uid}`).get();return s.exists()?s.val():null},uidByUsername=async u=>{u=norm(u);if(!u)return null;const s=await db.ref(`usernames/${u}`).get();return s.exists()?s.val():null},profileByUsername=async u=>{const uid=await uidByUsername(u);if(!uid)return null;const p=await loadProfile(uid);return p?{uid,...p}:null};
+    
+    async function signUp(){
+      const username=usernameInput.value.trim(),password=passwordInput.value.trim(),recoveryEmail=recoveryEmailInput.value.trim(),displayName=displayNameInput.value.trim();
+      if(!username||!password)return notify('Please enter a username and password.');
+      if(recoveryEmail&&!validEmail(recoveryEmail))return notify('Recovery email is not valid.');
+      const u=norm(username);
+      if(!validUser(u))return notify('Username must be 3 to 24 characters and use only letters, numbers, or underscores.');
+      
+      showView(2); // Show Loading Screen
+      isSigningUp = true;
+      try {
+        const existingUid = await uidByUsername(u);
+        if(existingUid) throw new Error('That username is already taken.');
+        
+        const authEmail=recoveryEmail||`${u}@${AUTH_EMAIL_DOMAIN}`;
+        const checkRef = db.ref(`usernames/${u}`);
+        const tx = await checkRef.transaction(c => c ? c : '__RESERVING__');
+        if(!tx.committed || tx.snapshot.val() !== '__RESERVING__') throw new Error('That username is already taken.');
+
+        const cred = await auth.createUserWithEmailAndPassword(authEmail, password);
+        const uid = cred.user.uid;
+        await db.ref(`usernames/${u}`).set(uid);
+        const profilePayload = { username: u, displayName: safe(displayName||u), authEmail: authEmail, recoveryEmail: recoveryEmail||'', createdAt: Date.now() };
+        await db.ref(`users/${uid}`).set(profilePayload);
+        await cred.user.updateProfile({displayName: safe(displayName||username)});
+        
+        currentProfile = profilePayload;
+        notify('Account created successfully!', 'success');
+        setupDashboard();
+      } catch(e) {
+        showView(0); // Return to auth view on fail
+        await db.ref(`usernames/${u}`).remove().catch(()=>{});
+        throw e;
+      } finally {
+        isSigningUp = false;
+      }
+    }
+
+    async function signIn(){
+      const username=usernameInput.value.trim(),password=passwordInput.value.trim();
+      if(!username||!password)return notify('Please enter username and password.');
+      
+      showView(2); // Show Loading Screen
+      try {
+        const p=await profileByUsername(username);
+        if(!p) throw new Error('That username does not exist.');
+        await auth.signInWithEmailAndPassword(p.authEmail,password);
+      } catch(e) {
+        showView(0); // Return to auth view
+        throw e;
+      }
+    }
+    
+    // FIXED: Reset Password Error
+    async function resetPassword(){
+      const username=usernameInput.value.trim();
+      if(!username) throw new Error('Enter your username first.');
+      showView(2); // Show Loading Screen
+      try {
+        const p=await profileByUsername(username);
+        if(!p) throw new Error('That username does not exist.');
+        if(!p.recoveryEmail) throw new Error('This account does not have a recovery email.');
+        // Directly hit their recovery email
+        await auth.sendPasswordResetEmail(p.recoveryEmail);
+        notify('Password reset email sent to your recovery address.', 'success');
+      } finally {
+        showView(0); // Return to auth view
+      }
+    }
+    
+    async function resolveMembers(list){const names=[...new Set(list.split(',').map(s=>norm(s.trim())).filter(Boolean))],map={};for(const u of names){const id=await uidByUsername(u);if(!id)throw new Error(`Username not found: ${u}`);map[id]=u}return map}
+    function scrollToBottom(){messagesDiv.scrollTop=messagesDiv.scrollHeight}
+    
+    function renderChatList(){chatList.innerHTML='';if(!currentUser)return; if(!chats.length){const e=document.createElement('div');e.className='small-note';e.style.padding='8px 4px';e.textContent='No chats yet. Create one above.';chatList.appendChild(e);return} for(const chat of chats){const item=document.createElement('div');item.className='chat-item'+(chat.id===activeChatId?' active':'');const t=document.createElement('div');t.className='title';t.textContent=chat.title||'Untitled chat';const m=document.createElement('div');m.className='meta';const c=Object.keys(chat.members||{}).length,left=document.createElement('span'),right=document.createElement('span');left.textContent=`${c} member${c===1?'':'s'}`;right.textContent=chatPassCache[chat.id]?'Unlocked':'Locked';m.append(left,right);item.append(t,m);item.addEventListener('click',()=>selectChat(chat.id));chatList.appendChild(item)}}
+    function renderMessageNode(m,text){const outer=document.createElement('div');outer.className='message'+(m.senderUid===currentUser.uid?' row-right':'');const a=document.createElement('div');a.className='avatar';a.textContent=safe(m.senderName||'A').slice(0,2).toUpperCase();const content=document.createElement('div');content.style.cssText='display:flex;flex-direction:column;min-width:0';const bubble=document.createElement('div');bubble.className='bubble '+(m.senderUid===currentUser.uid?'bubble-me':'bubble-other');const sender=document.createElement('div');sender.className='sender';sender.textContent=m.senderName||'Anonymous';const msg=document.createElement('div');msg.className='msgtext';msg.textContent=text;const meta=document.createElement('div');meta.className='meta-row';meta.append(document.createElement('div'));meta.firstChild.textContent=ts(m.timestamp);const u=document.createElement('div');u.textContent=m.senderUid?uid6(m.senderUid):'';meta.append(u);bubble.append(sender,msg);content.append(bubble,meta);outer.append(a,content);return outer}
+    
+    async function renderMessages(){
+      if(!activeChatId){ messagesInner.innerHTML=''; emptyState.style.display='grid'; return; }
+      const pass=chatPassCache[activeChatId]||roomPasscode.value.trim();
+      if(!pass){ messagesInner.innerHTML=''; const n=document.createElement('div'); n.className='small-note'; n.style.padding='10px'; n.textContent='Enter the chat passcode to view and send messages.'; messagesInner.appendChild(n); emptyState.style.display='none'; return; }
+      for(const m of chatMessageBuffer){ if(m.plain === undefined) { m.plain = m.encrypted ? await decrypt(m.encrypted, pass) : ''; } }
+      messagesInner.innerHTML='';
+      for(const m of chatMessageBuffer){ messagesInner.appendChild(renderMessageNode(m, m.plain === null ? '🔒 Wrong passcode or corrupted message' : m.plain)); }
+      emptyState.style.display='none'; renderChatList(); scrollToBottom();
+    }
+    
+    async function loadMyChats(){chatListeners.forEach(fn=>{try{fn()}catch(e){}});chatListeners=[];chats=[];chatList.innerHTML='';const ref=db.ref(`userChats/${currentUser.uid}`),added=async s=>{if(!s.exists())return;const id=s.key,cs=await db.ref(`chats/${id}`).get();if(!cs.exists())return;const chat=cs.val();chats=chats.filter(c=>c.id!==id);chats.push({id,...chat});chats.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));renderChatList();if(!activeChatId)selectChat(id)},removed=s=>{const id=s.key;chats=chats.filter(c=>c.id!==id);if(activeChatId===id){activeChatId=null;activeChat=null;chatMessageBuffer=[];messagesInner.innerHTML='';chatTitle.textContent='No chat selected';chatMeta.textContent='Create a room or select one from the list.';emptyState.style.display='grid';lockLine.textContent='Signed in, but no room is selected yet.'}renderChatList()};ref.on('child_added',added);ref.on('child_removed',removed);chatListeners.push(()=>ref.off('child_added',added),()=>ref.off('child_removed',removed))}
+    async function selectChat(id){const snap=await db.ref(`chats/${id}`).get();if(!snap.exists())return;const chat=snap.val();if(!chat.members||!chat.members[currentUser.uid])return notify('You are not a member of that chat.');activeChatId=id;activeChat={id,...chat};roomPasscode.value=chatPassCache[id]||'';chatTitle.textContent=chat.title||'Untitled chat';const c=Object.keys(chat.members||{}).length;chatMeta.textContent=`${c} member${c===1?'':'s'} • encrypted`;lockLine.textContent=chatPassCache[id]?'Room unlocked. New messages will decrypt automatically.':'Enter the room passcode to unlock messages.';renderChatList();subscribeToMessages(id);await renderMessages()}
+    function unsubscribeMessages(){if(activeMessagesRef&&activeMessagesOff)activeMessagesRef.off('child_added',activeMessagesOff);activeMessagesRef=null;activeMessagesOff=null}
+    function subscribeToMessages(id){unsubscribeMessages();chatMessageBuffer=[];const ref=db.ref(`chats/${id}/messages`).orderByChild('timestamp').limitToLast(200);activeMessagesRef=ref;activeMessagesOff=async s=>{chatMessageBuffer.push({id:s.key,...s.val()});chatMessageBuffer.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));await renderMessages()};ref.on('child_added',activeMessagesOff,console.error)}
+    
+    // FIXED: UID Null Reference
+    async function createChat(){
+      if(!currentUser) throw new Error('You must be signed in to create a chat.');
+      const title=newChatTitle.value.trim(),pass=chatPasscode.value.trim(),invites=inviteUsers.value.trim();
+      if(!title||!pass||!invites) throw new Error('Please provide a title, invite usernames, and a passcode.');
+      if(pass.length<8) throw new Error('Passcode should be at least 8 characters.');
+      
+      const memberMap=await resolveMembers(invites);
+      memberMap[currentUser.uid]=currentProfile?.username||'me';
+      const chatRef=db.ref('chats').push(),id=chatRef.key,members={},memberNames={};
+      for(const [uid,u] of Object.entries(memberMap)){members[uid]=true;memberNames[uid]=u}
+      await chatRef.set({title,createdBy:currentUser.uid,createdAt:Date.now(),memberNames,members});
+      const updates={};
+      for(const uid of Object.keys(members))updates[`userChats/${uid}/${id}`]=true;
+      await db.ref().update(updates);
+      chatPassCache[id]=pass;localStorage.setItem('chatPassCache',JSON.stringify(chatPassCache));
+      newChatTitle.value=inviteUsers.value=chatPasscode.value='';
+      await loadMyChats();await selectChat(id);
+    }
+
+    async function inviteToActiveChat(){if(!currentUser||!activeChatId)return;const raw=globalSearch.value.trim();if(!raw)return;const memberMap=await resolveMembers(raw),updates={};for(const [uid,u] of Object.entries(memberMap)){updates[`chats/${activeChatId}/members/${uid}`]=true;updates[`chats/${activeChatId}/memberNames/${uid}`]=u;updates[`userChats/${uid}/${activeChatId}`]=true}await db.ref().update(updates);globalSearch.value='';notify('Users successfully invited!', 'success');const snap=await db.ref(`chats/${activeChatId}`).get();if(snap.exists()){activeChat={id:activeChatId,...snap.val()};chatMeta.textContent=`${Object.keys(activeChat.members||{}).length} members • encrypted`;renderChatList()}}
+    async function unlockRoom(){if(!activeChatId)return;const pass=roomPasscode.value.trim();if(!pass)return notify('Enter the room passcode.');chatPassCache[activeChatId]=pass;localStorage.setItem('chatPassCache',JSON.stringify(chatPassCache));lockLine.textContent='Room unlocked. New messages will decrypt automatically.';notify('Room unlocked!', 'success');await renderMessages();renderChatList()}
+    async function sendMessage(){if(!currentUser||!activeChatId)return;const plain=textInput.value.trim();if(!plain)return;const pass=chatPassCache[activeChatId]||roomPasscode.value.trim();if(!pass)return notify('Unlock the chat with the passcode first.');sendBtn.disabled=true;try{await db.ref(`chats/${activeChatId}/messages`).push({senderUid:currentUser.uid,senderName:currentProfile?.displayName||currentProfile?.username||'Anonymous',encrypted:await encrypt(plain,pass),timestamp:Date.now()});textInput.value='';textInput.style.height='auto'}finally{sendBtn.disabled=false}}
+    function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,160)+'px'}
+    
+    function wire(){
+      signUpBtn.addEventListener('click',async()=>{try{await signUp()}catch(e){notify(e.message||'Failed to create account.')}});
+      signInBtn.addEventListener('click',async()=>{try{await signIn()}catch(e){notify(e.message||'Failed to sign in.')}});
+      resetBtn.addEventListener('click',async()=>{try{await resetPassword()}catch(e){notify(e.message||'Failed to send password reset.')}});
+      logoutBtn.addEventListener('click',()=>auth.signOut());
+      createChatBtn.addEventListener('click',async()=>{try{await createChat()}catch(e){notify(e.message||'Failed to create chat.')}});
+      inviteBtn.addEventListener('click',async()=>{try{await inviteToActiveChat()}catch(e){notify(e.message||'Failed to invite users.')}});
+      unlockBtn.addEventListener('click',async()=>{try{await unlockRoom()}catch(e){notify(e.message||'Failed to unlock room.')}});
+      sendBtn.addEventListener('click',sendMessage);
+      textInput.addEventListener('input',()=>autoResize(textInput));
+      roomPasscode.addEventListener('input',()=>{if(activeChatId)renderMessages()});
+      globalSearch.addEventListener('keydown',e=>{if(e.key==='Enter')inviteToActiveChat()});
+      textInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
+    }
+    
+    auth.onAuthStateChanged(async user=>{
+      if(isSigningUp) return;
+      currentUser=user||null;
+      
+      if(!user){
+        currentProfile=null;
+        activeChatId=null;
+        activeChat=null;
+        chatMessageBuffer=[];
+        showView(0); // Show Auth View
+        chatListeners.forEach(fn=>{try{fn()}catch(e){}});
+        chatListeners=[];
+        return;
+      }
+      
+      showView(2); // Explicitly display loader while fetching DB properties
+      
+      if(!currentProfile) {
+        currentProfile = await loadProfile(user.uid);
+      }
+      
+      if(!currentProfile){
+        setTimeout(async () => {
+          if(isSigningUp) return;
+          currentProfile = await loadProfile(user.uid);
+          if(!currentProfile) {
+            notify('Account profile mapping dropped or incomplete. Re-authenticating...');
+            await auth.signOut();
+          } else {
+            setupDashboard();
+          }
+        }, 800);
+        return;
+      }
+      setupDashboard();
+    });
+    
+    function setupDashboard() {
+      showView(1); // Show App View
+      whoami.textContent=`${currentProfile.displayName||currentProfile.username||'User'} @ ${currentProfile.username||'unknown'}`;
+      meInfo.textContent=`Signed in as ${currentProfile.displayName||currentProfile.username||'User'} • username: ${currentProfile.username||'unknown'}`;
+      loadMyChats().then(() => {
+        renderChatList();
+        if(activeChatId) selectChat(activeChatId);
+      });
+    }
+    
+    wire();
+  </script>
+</body>
+</html>
