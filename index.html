@@ -121,18 +121,18 @@
     firebase.initializeApp(firebaseConfig);
     const auth=firebase.auth(),db=firebase.database(),enc=new TextEncoder(),dec=new TextDecoder(),AUTH_EMAIL_DOMAIN='chatroom-4ac6a.local';
 
-    const $=id=>document.getElementById(id),loadingView=$('loadingView'),authView=$('authView'),appView=$('appView'),userbar=$('userbar'),whoami=$('whoami'),meInfo=$('meInfo'),chatList=$('chatList'),chatTitle=$('chatTitle'),chatMeta=$('chatMeta'),messagesInner=$('messages-inner'),messagesDiv=$('messages'),emptyState=$('emptyState'),lockLine=$('lockLine'),usernameInput=$('username'),passwordInput=$('password'),recoveryEmailInput=$('recoveryEmail'),displayNameInput=$('displayName'),newChatTitle=$('newChatTitle'),inviteUsers=$('inviteUsers'),chatPasscode=$('chatPasscode'),globalSearch=$('globalSearch'),roomPasscode=$('roomPasscode'),textInput=$('text'),signUpBtn=$('signUpBtn'),signInBtn=$('signInBtn'),resetBtn=$('resetBtn'),logoutBtn=$('logoutBtn'),createChatBtn=$('createChatBtn'),inviteBtn=$('inviteBtn'),unlockBtn=$('unlockBtn'),sendBtn=$('sendBtn');
-
+    const $=id=>document.getElementById(id),loadingView=$('loadingView'),authView=$('authView'),appView=$('appView'),userbar=$('userbar'),whoami=$('whoami'),meInfo=$('meInfo');
+    const unlockedChatsList=$('unlockedChatsList'),availableChatsList=$('availableChatsList'),chatTitle=$('chatTitle'),chatMeta=$('chatMeta'),messagesInner=$('messages-inner'),messagesDiv=$('messages'),emptyState=$('emptyState'),lockLine=$('lockLine');
     let currentUser=null,currentProfile=null,chats=[],activeChatId=null,activeChat=null,activeMessagesRef=null,activeMessagesOff=null,chatPassCache=JSON.parse(localStorage.getItem('chatPassCache')||'{}'),chatMessageBuffer=[],chatListeners=[];
     let isSigningUp = false;
+    const decryptionCache = new Map();
 
     const norm=s=>(s||'').trim().toLowerCase().split(' ').join(''),safe=s=>(s||'Anonymous').trim().slice(0,32)||'Anonymous',uid6=s=>(s||'').slice(0,6),ts=t=>{const d=new Date(t||Date.now());let h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0');return `${h=h%12||12}:${m} ${h>=12?'PM':'AM'}`};
     const b64=b=>{let s='';for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s)},u8=s=>{const b=atob(s),a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a};
     const validUser=s=>{s=norm(s);if(s.length<3||s.length>24)return false;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);if(!((c>=97&&c<=122)||(c>=48&&c<=57)||c===95))return false}return true},validEmail=s=>{s=(s||'').trim();const a=s.indexOf('@'),l=s.lastIndexOf('@'),d=s.lastIndexOf('.');return !!s&&a>0&&a===l&&d>a+1&&d<s.length-1};
     
     function notify(msg, type = 'error') {
-      const container = $('toastContainer');
-      const t = document.createElement('div');
+      const container = $('toastContainer'), t = document.createElement('div');
       t.className = `toast ${type}`;
       t.innerHTML = `<span style="font-size:1.1rem">${type==='error'?'⚠️':'✅'}</span><div>${msg}</div>`;
       container.appendChild(t);
@@ -143,191 +143,270 @@
     async function encrypt(text,pass){const iv=crypto.getRandomValues(new Uint8Array(12)),salt=crypto.getRandomValues(new Uint8Array(16)),key=await deriveKey(pass,salt),data=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(text));return {iv:b64(iv),salt:b64(salt),data:b64(new Uint8Array(data))}}
     async function decrypt(payload,pass){try{const iv=u8(payload.iv),salt=u8(payload.salt),data=u8(payload.data),key=await deriveKey(pass,salt),plain=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,data);return dec.decode(plain)}catch(e){return null}}
     
-    // 0 = Auth View, 1 = App View, 2 = Loading Screen
+    // NEW: Unified Cryptographic Interceptor
+    async function validatePasscode(chat, pass, messages) {
+      if (!pass) return false;
+      if (chat.verification) return (await decrypt(chat.verification, pass)) === 'VALID';
+      if (messages && messages.length > 0) {
+        const testMsg = messages.find(m => m.encrypted);
+        if (testMsg) return (await decrypt(testMsg.encrypted, pass)) !== null;
+      }
+      return true; // Fallback for newly created empty legacy rooms
+    }
+
     const showView = (state) => {
       loadingView.style.display = state === 2 ? 'grid' : 'none';
       authView.style.display = state === 0 ? 'grid' : 'none';
-      appView.style.display = state === 1 ? 'grid' : 'none';
+      appView.style.display = state === 1 ? 'flex' : 'none';
       userbar.style.display = state === 1 ? 'flex' : 'none';
     };
+    
+    function switchAppPane(pane) {
+      $('dashboardView').style.display = pane === 'dash' ? 'flex' : 'none';
+      $('chatRoomView').style.display = pane === 'chat' ? 'flex' : 'none';
+      if (pane === 'dash') {
+        activeChatId = null; activeChat = null;
+        unsubscribeMessages();
+        renderChatList();
+      }
+    }
 
     const loadProfile=async uid=>{const s=await db.ref(`users/${uid}`).get();return s.exists()?s.val():null},uidByUsername=async u=>{u=norm(u);if(!u)return null;const s=await db.ref(`usernames/${u}`).get();return s.exists()?s.val():null},profileByUsername=async u=>{const uid=await uidByUsername(u);if(!uid)return null;const p=await loadProfile(uid);return p?{uid,...p}:null};
     
     async function signUp(){
-      const username=usernameInput.value.trim(),password=passwordInput.value.trim(),recoveryEmail=recoveryEmailInput.value.trim(),displayName=displayNameInput.value.trim();
+      const username=$('username').value.trim(),password=$('password').value.trim(),recoveryEmail=$('recoveryEmail').value.trim(),displayName=$('displayName').value.trim();
       if(!username||!password)return notify('Please enter a username and password.');
       if(recoveryEmail&&!validEmail(recoveryEmail))return notify('Recovery email is not valid.');
-      const u=norm(username);
-      if(!validUser(u))return notify('Username must be 3 to 24 characters and use only letters, numbers, or underscores.');
+      const u=norm(username); if(!validUser(u))return notify('Username must be 3 to 24 characters and use only letters, numbers, or underscores.');
       
-      showView(2); // Show Loading Screen
-      isSigningUp = true;
+      showView(2); isSigningUp = true;
       try {
-        const existingUid = await uidByUsername(u);
-        if(existingUid) throw new Error('That username is already taken.');
-        
+        if(await uidByUsername(u)) throw new Error('That username is already taken.');
         const authEmail=recoveryEmail||`${u}@${AUTH_EMAIL_DOMAIN}`;
-        const checkRef = db.ref(`usernames/${u}`);
-        const tx = await checkRef.transaction(c => c ? c : '__RESERVING__');
-        if(!tx.committed || tx.snapshot.val() !== '__RESERVING__') throw new Error('That username is already taken.');
-
         const cred = await auth.createUserWithEmailAndPassword(authEmail, password);
         const uid = cred.user.uid;
-        await db.ref(`usernames/${u}`).set(uid);
+        try {
+          await db.ref(`usernames/${u}`).set(uid);
+        } catch(dbError) {
+          await cred.user.delete();
+          throw new Error('That username was just taken! Please try another.');
+        }
         const profilePayload = { username: u, displayName: safe(displayName||u), authEmail: authEmail, recoveryEmail: recoveryEmail||'', createdAt: Date.now() };
         await db.ref(`users/${uid}`).set(profilePayload);
         await cred.user.updateProfile({displayName: safe(displayName||username)});
         
-        currentProfile = profilePayload;
-        notify('Account created successfully!', 'success');
-        setupDashboard();
-      } catch(e) {
-        showView(0); // Return to auth view on fail
-        await db.ref(`usernames/${u}`).remove().catch(()=>{});
-        throw e;
-      } finally {
-        isSigningUp = false;
-      }
+        currentProfile = profilePayload; notify('Account created successfully!', 'success'); setupDashboard();
+      } catch(e) { showView(0); notify(e.message); } finally { isSigningUp = false; }
     }
 
     async function signIn(){
-      const username=usernameInput.value.trim(),password=passwordInput.value.trim();
-      if(!username||!password)return notify('Please enter username and password.');
-      
-      showView(2); // Show Loading Screen
+      const username=$('username').value.trim(),password=$('password').value.trim();
+      if(!username||!password) return notify('Please enter username and password.');
+      showView(2);
       try {
         const p=await profileByUsername(username);
         if(!p) throw new Error('That username does not exist.');
         await auth.signInWithEmailAndPassword(p.authEmail,password);
-      } catch(e) {
-        showView(0); // Return to auth view
-        throw e;
-      }
+      } catch(e) { showView(0); notify(e.message); }
     }
     
-    // FIXED: Reset Password Error
     async function resetPassword(){
-      const username=usernameInput.value.trim();
-      if(!username) throw new Error('Enter your username first.');
-      showView(2); // Show Loading Screen
+      const username=$('username').value.trim(); if(!username) return notify('Enter your username first.');
+      showView(2);
       try {
         const p=await profileByUsername(username);
         if(!p) throw new Error('That username does not exist.');
-        if(!p.recoveryEmail) throw new Error('This account does not have a recovery email.');
-        // Directly hit their recovery email
-        await auth.sendPasswordResetEmail(p.recoveryEmail);
-        notify('Password reset email sent to your recovery address.', 'success');
-      } finally {
-        showView(0); // Return to auth view
-      }
+        if(!p.recoveryEmail) throw new Error('This account does not have a recovery email setup.');
+        await auth.sendPasswordResetEmail(p.recoveryEmail); notify('Password reset email sent.', 'success');
+      } catch(e) { notify(e.message); } finally { showView(0); }
     }
     
     async function resolveMembers(list){const names=[...new Set(list.split(',').map(s=>norm(s.trim())).filter(Boolean))],map={};for(const u of names){const id=await uidByUsername(u);if(!id)throw new Error(`Username not found: ${u}`);map[id]=u}return map}
     function scrollToBottom(){messagesDiv.scrollTop=messagesDiv.scrollHeight}
     
-    function renderChatList(){chatList.innerHTML='';if(!currentUser)return; if(!chats.length){const e=document.createElement('div');e.className='small-note';e.style.padding='8px 4px';e.textContent='No chats yet. Create one above.';chatList.appendChild(e);return} for(const chat of chats){const item=document.createElement('div');item.className='chat-item'+(chat.id===activeChatId?' active':'');const t=document.createElement('div');t.className='title';t.textContent=chat.title||'Untitled chat';const m=document.createElement('div');m.className='meta';const c=Object.keys(chat.members||{}).length,left=document.createElement('span'),right=document.createElement('span');left.textContent=`${c} member${c===1?'':'s'}`;right.textContent=chatPassCache[chat.id]?'Unlocked':'Locked';m.append(left,right);item.append(t,m);item.addEventListener('click',()=>selectChat(chat.id));chatList.appendChild(item)}}
+    function renderChatList(){
+      unlockedChatsList.innerHTML=''; availableChatsList.innerHTML='';
+      if(!currentUser)return;
+      
+      let unlockedCount = 0, lockedCount = 0;
+      for(const chat of chats){
+        const isUnlocked = !!chatPassCache[chat.id];
+        const item=document.createElement('div'); item.className='chat-item';
+        const t=document.createElement('div'); t.className='title'; t.textContent=chat.title||'Untitled chat';
+        const m=document.createElement('div'); m.className='meta';
+        const c=Object.keys(chat.members||{}).length, left=document.createElement('span'), right=document.createElement('span');
+        left.textContent=`${c} member${c===1?'':'s'}`; right.textContent=isUnlocked?'Unlocked 🔓':'Locked 🔒';
+        m.append(left,right); item.append(t,m);
+        item.addEventListener('click',()=>selectChat(chat.id));
+        
+        if (isUnlocked) { unlockedChatsList.appendChild(item); unlockedCount++; } 
+        else { availableChatsList.appendChild(item); lockedCount++; }
+      }
+
+      if(unlockedCount === 0) unlockedChatsList.innerHTML = '<div class="empty-dash">No unlocked chats currently.</div>';
+      if(lockedCount === 0) availableChatsList.innerHTML = '<div class="empty-dash">You have joined all available chats!</div>';
+    }
+
     function renderMessageNode(m,text){const outer=document.createElement('div');outer.className='message'+(m.senderUid===currentUser.uid?' row-right':'');const a=document.createElement('div');a.className='avatar';a.textContent=safe(m.senderName||'A').slice(0,2).toUpperCase();const content=document.createElement('div');content.style.cssText='display:flex;flex-direction:column;min-width:0';const bubble=document.createElement('div');bubble.className='bubble '+(m.senderUid===currentUser.uid?'bubble-me':'bubble-other');const sender=document.createElement('div');sender.className='sender';sender.textContent=m.senderName||'Anonymous';const msg=document.createElement('div');msg.className='msgtext';msg.textContent=text;const meta=document.createElement('div');meta.className='meta-row';meta.append(document.createElement('div'));meta.firstChild.textContent=ts(m.timestamp);const u=document.createElement('div');u.textContent=m.senderUid?uid6(m.senderUid):'';meta.append(u);bubble.append(sender,msg);content.append(bubble,meta);outer.append(a,content);return outer}
     
+    // FIXED: Active render loop now dynamically intercepts poisoned cache strings
     async function renderMessages(){
-      if(!activeChatId){ messagesInner.innerHTML=''; emptyState.style.display='grid'; return; }
-      const pass=chatPassCache[activeChatId]||roomPasscode.value.trim();
-      if(!pass){ messagesInner.innerHTML=''; const n=document.createElement('div'); n.className='small-note'; n.style.padding='10px'; n.textContent='Enter the chat passcode to view and send messages.'; messagesInner.appendChild(n); emptyState.style.display='none'; return; }
-      for(const m of chatMessageBuffer){ if(m.plain === undefined) { m.plain = m.encrypted ? await decrypt(m.encrypted, pass) : ''; } }
+      if(!activeChatId) return;
+      const pass = chatPassCache[activeChatId];
+
+      if(pass) {
+        const isValid = await validatePasscode(activeChat, pass, chatMessageBuffer);
+        if(!isValid) {
+          // If the cached password fails, nuke it and bring the UI input back immediately!
+          delete chatPassCache[activeChatId];
+          localStorage.setItem('chatPassCache', JSON.stringify(chatPassCache));
+          $('unlockArea').style.display = 'flex'; $('inviteArea').style.display = 'none';
+          lockLine.textContent = 'Incorrect or corrupted passcode. Please re-enter the room passcode.';
+          messagesInner.innerHTML = ''; emptyState.style.display = 'grid';
+          return;
+        }
+        $('unlockArea').style.display = 'none'; $('inviteArea').style.display = 'flex';
+        lockLine.textContent = 'Room unlocked. E2E Encrypted.';
+      } else {
+        $('unlockArea').style.display = 'flex'; $('inviteArea').style.display = 'none';
+        lockLine.textContent = 'Enter the room passcode to unlock.';
+        messagesInner.innerHTML = ''; emptyState.style.display = 'grid';
+        return;
+      }
+      
+      for(const m of chatMessageBuffer){ 
+        const cacheKey = `${m.id}_${pass}`;
+        if (!decryptionCache.has(cacheKey)) {
+          const plain = m.encrypted ? await decrypt(m.encrypted, pass) : '';
+          decryptionCache.set(cacheKey, plain);
+        }
+        m.plain = decryptionCache.get(cacheKey);
+      }
+      
       messagesInner.innerHTML='';
-      for(const m of chatMessageBuffer){ messagesInner.appendChild(renderMessageNode(m, m.plain === null ? '🔒 Wrong passcode or corrupted message' : m.plain)); }
-      emptyState.style.display='none'; renderChatList(); scrollToBottom();
+      for(const m of chatMessageBuffer){ messagesInner.appendChild(renderMessageNode(m, m.plain === null ? '🔒 Corrupted message' : m.plain)); }
+      emptyState.style.display='none'; scrollToBottom();
     }
     
-    async function loadMyChats(){chatListeners.forEach(fn=>{try{fn()}catch(e){}});chatListeners=[];chats=[];chatList.innerHTML='';const ref=db.ref(`userChats/${currentUser.uid}`),added=async s=>{if(!s.exists())return;const id=s.key,cs=await db.ref(`chats/${id}`).get();if(!cs.exists())return;const chat=cs.val();chats=chats.filter(c=>c.id!==id);chats.push({id,...chat});chats.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));renderChatList();if(!activeChatId)selectChat(id)},removed=s=>{const id=s.key;chats=chats.filter(c=>c.id!==id);if(activeChatId===id){activeChatId=null;activeChat=null;chatMessageBuffer=[];messagesInner.innerHTML='';chatTitle.textContent='No chat selected';chatMeta.textContent='Create a room or select one from the list.';emptyState.style.display='grid';lockLine.textContent='Signed in, but no room is selected yet.'}renderChatList()};ref.on('child_added',added);ref.on('child_removed',removed);chatListeners.push(()=>ref.off('child_added',added),()=>ref.off('child_removed',removed))}
-    async function selectChat(id){const snap=await db.ref(`chats/${id}`).get();if(!snap.exists())return;const chat=snap.val();if(!chat.members||!chat.members[currentUser.uid])return notify('You are not a member of that chat.');activeChatId=id;activeChat={id,...chat};roomPasscode.value=chatPassCache[id]||'';chatTitle.textContent=chat.title||'Untitled chat';const c=Object.keys(chat.members||{}).length;chatMeta.textContent=`${c} member${c===1?'':'s'} • encrypted`;lockLine.textContent=chatPassCache[id]?'Room unlocked. New messages will decrypt automatically.':'Enter the room passcode to unlock messages.';renderChatList();subscribeToMessages(id);await renderMessages()}
+    async function loadMyChats(){
+      chatListeners.forEach(fn=>{try{fn()}catch(e){}}); chatListeners=[]; chats=[];
+      const ref=db.ref(`userChats/${currentUser.uid}`);
+      
+      const added = async s => {
+        if(!s.exists())return; const id=s.key, cs=await db.ref(`chats/${id}`).get();
+        if(!cs.exists())return; const chat=cs.val();
+
+        chats=chats.filter(c=>c.id!==id); chats.push({id,...chat}); chats.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+        renderChatList();
+        if (activeChatId === id) await renderMessages();
+      };
+      
+      const removed = s => {
+        const id=s.key; chats=chats.filter(c=>c.id!==id);
+        if(activeChatId===id) switchAppPane('dash');
+        renderChatList();
+      };
+      
+      ref.on('child_added',added); ref.on('child_removed',removed);
+      chatListeners.push(()=>ref.off('child_added',added),()=>ref.off('child_removed',removed));
+    }
+
+    async function selectChat(id){
+      const snap=await db.ref(`chats/${id}`).get(); if(!snap.exists())return;
+      const chat=snap.val(); if(!chat.members||!chat.members[currentUser.uid])return notify('You are not a member of that chat.');
+      
+      activeChatId=id; activeChat={id,...chat}; $('roomPasscode').value='';
+      chatTitle.textContent=chat.title||'Untitled chat'; const c=Object.keys(chat.members||{}).length;
+      chatMeta.textContent=`${c} member${c===1?'':'s'} • encrypted`;
+      
+      switchAppPane('chat'); subscribeToMessages(id); await renderMessages();
+    }
+
     function unsubscribeMessages(){if(activeMessagesRef&&activeMessagesOff)activeMessagesRef.off('child_added',activeMessagesOff);activeMessagesRef=null;activeMessagesOff=null}
     function subscribeToMessages(id){unsubscribeMessages();chatMessageBuffer=[];const ref=db.ref(`chats/${id}/messages`).orderByChild('timestamp').limitToLast(200);activeMessagesRef=ref;activeMessagesOff=async s=>{chatMessageBuffer.push({id:s.key,...s.val()});chatMessageBuffer.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));await renderMessages()};ref.on('child_added',activeMessagesOff,console.error)}
     
-    // FIXED: UID Null Reference
     async function createChat(){
-      if(!currentUser) throw new Error('You must be signed in to create a chat.');
-      const title=newChatTitle.value.trim(),pass=chatPasscode.value.trim(),invites=inviteUsers.value.trim();
-      if(!title||!pass||!invites) throw new Error('Please provide a title, invite usernames, and a passcode.');
-      if(pass.length<8) throw new Error('Passcode should be at least 8 characters.');
+      if(!currentUser) return notify('Session error. Re-login.');
+      const title=$('newChatTitle').value.trim(), pass=$('chatPasscode').value.trim(), invites=$('inviteUsers').value.trim();
+      if(!title||!pass||!invites) return notify('Please provide a title, invite usernames, and a passcode.');
+      if(pass.length<8) return notify('Passcode should be at least 8 characters.');
       
-      const memberMap=await resolveMembers(invites);
-      memberMap[currentUser.uid]=currentProfile?.username||'me';
-      const chatRef=db.ref('chats').push(),id=chatRef.key,members={},memberNames={};
-      for(const [uid,u] of Object.entries(memberMap)){members[uid]=true;memberNames[uid]=u}
-      await chatRef.set({title,createdBy:currentUser.uid,createdAt:Date.now(),memberNames,members});
-      const updates={};
-      for(const uid of Object.keys(members))updates[`userChats/${uid}/${id}`]=true;
-      await db.ref().update(updates);
-      chatPassCache[id]=pass;localStorage.setItem('chatPassCache',JSON.stringify(chatPassCache));
-      newChatTitle.value=inviteUsers.value=chatPasscode.value='';
-      await loadMyChats();await selectChat(id);
+      showView(2);
+      try {
+        const memberMap=await resolveMembers(invites); memberMap[currentUser.uid]=currentProfile?.username||'me';
+        const verificationToken = await encrypt('VALID', pass);
+
+        const chatRef=db.ref('chats').push(), id=chatRef.key, members={}, memberNames={};
+        for(const [uid,u] of Object.entries(memberMap)){members[uid]=true; memberNames[uid]=u;}
+        await chatRef.set({title, createdBy:currentUser.uid, createdAt:Date.now(), memberNames, members, verification: verificationToken});
+        
+        const updates={}; for(const uid of Object.keys(members)) updates[`userChats/${uid}/${id}`]=true;
+        await db.ref().update(updates);
+        
+        chatPassCache[id]=pass; localStorage.setItem('chatPassCache',JSON.stringify(chatPassCache));
+        $('newChatTitle').value=$('inviteUsers').value=$('chatPasscode').value='';
+        await loadMyChats(); await selectChat(id);
+      } catch(e) { notify(e.message); } finally { showView(1); }
     }
 
-    async function inviteToActiveChat(){if(!currentUser||!activeChatId)return;const raw=globalSearch.value.trim();if(!raw)return;const memberMap=await resolveMembers(raw),updates={};for(const [uid,u] of Object.entries(memberMap)){updates[`chats/${activeChatId}/members/${uid}`]=true;updates[`chats/${activeChatId}/memberNames/${uid}`]=u;updates[`userChats/${uid}/${activeChatId}`]=true}await db.ref().update(updates);globalSearch.value='';notify('Users successfully invited!', 'success');const snap=await db.ref(`chats/${activeChatId}`).get();if(snap.exists()){activeChat={id:activeChatId,...snap.val()};chatMeta.textContent=`${Object.keys(activeChat.members||{}).length} members • encrypted`;renderChatList()}}
-    async function unlockRoom(){if(!activeChatId)return;const pass=roomPasscode.value.trim();if(!pass)return notify('Enter the room passcode.');chatPassCache[activeChatId]=pass;localStorage.setItem('chatPassCache',JSON.stringify(chatPassCache));lockLine.textContent='Room unlocked. New messages will decrypt automatically.';notify('Room unlocked!', 'success');await renderMessages();renderChatList()}
-    async function sendMessage(){if(!currentUser||!activeChatId)return;const plain=textInput.value.trim();if(!plain)return;const pass=chatPassCache[activeChatId]||roomPasscode.value.trim();if(!pass)return notify('Unlock the chat with the passcode first.');sendBtn.disabled=true;try{await db.ref(`chats/${activeChatId}/messages`).push({senderUid:currentUser.uid,senderName:currentProfile?.displayName||currentProfile?.username||'Anonymous',encrypted:await encrypt(plain,pass),timestamp:Date.now()});textInput.value='';textInput.style.height='auto'}finally{sendBtn.disabled=false}}
+    async function inviteToActiveChat(){
+      if(!currentUser||!activeChatId)return; const raw=$('globalSearch').value.trim(); if(!raw)return;
+      const memberMap=await resolveMembers(raw), updates={};
+      for(const [uid,u] of Object.entries(memberMap)){updates[`chats/${activeChatId}/members/${uid}`]=true;updates[`chats/${activeChatId}/memberNames/${uid}`]=u;updates[`userChats/${uid}/${activeChatId}`]=true}
+      await db.ref().update(updates); $('globalSearch').value=''; notify('Users successfully invited!', 'success');
+      const snap=await db.ref(`chats/${activeChatId}`).get();
+      if(snap.exists()){activeChat={id:activeChatId,...snap.val()}; const c=Object.keys(activeChat.members||{}).length; chatMeta.textContent=`${c} members • encrypted`;}
+    }
+
+    async function unlockRoom(){
+      if(!activeChatId)return; const pass=$('roomPasscode').value.trim(); if(!pass)return notify('Enter the room passcode.');
+      showView(2);
+      try {
+        // Utilize the new unified verification interceptor
+        const isValid = await validatePasscode(activeChat, pass, chatMessageBuffer);
+        if(!isValid) throw new Error('Incorrect Passcode. Access Denied.');
+        
+        chatPassCache[activeChatId]=pass; localStorage.setItem('chatPassCache',JSON.stringify(chatPassCache));
+        $('roomPasscode').value=''; notify('Room unlocked!', 'success'); 
+        await renderMessages();
+      } catch(e) { 
+        notify(e.message); 
+        delete chatPassCache[activeChatId];
+        localStorage.setItem('chatPassCache', JSON.stringify(chatPassCache));
+      } finally { 
+        showView(1); 
+      }
+    }
+
+    async function sendMessage(){if(!currentUser||!activeChatId)return;const plain=$('text').value.trim();if(!plain)return;const pass=chatPassCache[activeChatId];if(!pass)return notify('Unlock the chat with the passcode first.');$('sendBtn').disabled=true;try{await db.ref(`chats/${activeChatId}/messages`).push({senderUid:currentUser.uid,senderName:currentProfile?.displayName||currentProfile?.username||'Anonymous',encrypted:await encrypt(plain,pass),timestamp:Date.now()});$('text').value='';$('text').style.height='auto'}finally{$('sendBtn').disabled=false}}
     function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,160)+'px'}
     
     function wire(){
-      signUpBtn.addEventListener('click',async()=>{try{await signUp()}catch(e){notify(e.message||'Failed to create account.')}});
-      signInBtn.addEventListener('click',async()=>{try{await signIn()}catch(e){notify(e.message||'Failed to sign in.')}});
-      resetBtn.addEventListener('click',async()=>{try{await resetPassword()}catch(e){notify(e.message||'Failed to send password reset.')}});
-      logoutBtn.addEventListener('click',()=>auth.signOut());
-      createChatBtn.addEventListener('click',async()=>{try{await createChat()}catch(e){notify(e.message||'Failed to create chat.')}});
-      inviteBtn.addEventListener('click',async()=>{try{await inviteToActiveChat()}catch(e){notify(e.message||'Failed to invite users.')}});
-      unlockBtn.addEventListener('click',async()=>{try{await unlockRoom()}catch(e){notify(e.message||'Failed to unlock room.')}});
-      sendBtn.addEventListener('click',sendMessage);
-      textInput.addEventListener('input',()=>autoResize(textInput));
-      roomPasscode.addEventListener('input',()=>{if(activeChatId)renderMessages()});
-      globalSearch.addEventListener('keydown',e=>{if(e.key==='Enter')inviteToActiveChat()});
-      textInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
+      $('signUpBtn').addEventListener('click',signUp); $('signInBtn').addEventListener('click',signIn); $('resetBtn').addEventListener('click',resetPassword);
+      $('logoutBtn').addEventListener('click',()=>auth.signOut());
+      $('createChatBtn').addEventListener('click',createChat); $('inviteBtn').addEventListener('click',inviteToActiveChat);
+      $('unlockBtn').addEventListener('click',unlockRoom); $('sendBtn').addEventListener('click',sendMessage);
+      $('text').addEventListener('input',()=>autoResize($('text')));
+      $('globalSearch').addEventListener('keydown',e=>{if(e.key==='Enter')inviteToActiveChat()});
+      $('text').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
+      $('backBtn').addEventListener('click', () => switchAppPane('dash'));
     }
     
     auth.onAuthStateChanged(async user=>{
-      if(isSigningUp) return;
-      currentUser=user||null;
+      if(isSigningUp) return; currentUser=user||null;
+      if(!user){ currentProfile=null; showView(0); switchAppPane('dash'); chatListeners.forEach(fn=>{try{fn()}catch(e){}}); chatListeners=[]; return; }
       
-      if(!user){
-        currentProfile=null;
-        activeChatId=null;
-        activeChat=null;
-        chatMessageBuffer=[];
-        showView(0); // Show Auth View
-        chatListeners.forEach(fn=>{try{fn()}catch(e){}});
-        chatListeners=[];
-        return;
-      }
-      
-      showView(2); // Explicitly display loader while fetching DB properties
-      
-      if(!currentProfile) {
-        currentProfile = await loadProfile(user.uid);
-      }
-      
-      if(!currentProfile){
-        setTimeout(async () => {
-          if(isSigningUp) return;
-          currentProfile = await loadProfile(user.uid);
-          if(!currentProfile) {
-            notify('Account profile mapping dropped or incomplete. Re-authenticating...');
-            await auth.signOut();
-          } else {
-            setupDashboard();
-          }
-        }, 800);
-        return;
-      }
+      showView(2); 
+      if(!currentProfile) { currentProfile = await loadProfile(user.uid); }
+      if(!currentProfile){ setTimeout(async () => { if(isSigningUp) return; currentProfile = await loadProfile(user.uid); if(!currentProfile) { notify('Profile dropped. Re-authenticating...'); await auth.signOut(); } else { setupDashboard(); } }, 800); return; }
       setupDashboard();
     });
     
     function setupDashboard() {
-      showView(1); // Show App View
+      showView(1); switchAppPane('dash');
       whoami.textContent=`${currentProfile.displayName||currentProfile.username||'User'} @ ${currentProfile.username||'unknown'}`;
-      meInfo.textContent=`Signed in as ${currentProfile.displayName||currentProfile.username||'User'} • username: ${currentProfile.username||'unknown'}`;
-      loadMyChats().then(() => {
-        renderChatList();
-        if(activeChatId) selectChat(activeChatId);
-      });
+      meInfo.textContent=`Signed in as ${currentProfile.displayName||currentProfile.username||'User'}`;
+      loadMyChats();
     }
     
     wire();
